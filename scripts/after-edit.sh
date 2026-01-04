@@ -7,6 +7,10 @@
 
 set -euo pipefail
 
+# Token multiplier: We only track file reads/edits, but context also includes
+# agent responses, tool calls, system prompts, etc. 4x approximates total usage.
+TOKEN_MULTIPLIER=4
+
 # Cross-platform sed -i
 sedi() {
   if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -97,10 +101,14 @@ fi
 # =============================================================================
 
 if [[ -f "$CONTEXT_LOG" ]]; then
-  EDIT_TOKENS=$(( (OLD_TOTAL + NEW_TOTAL) / 4 ))
-  if [[ $EDIT_TOKENS -lt 10 ]]; then
-    EDIT_TOKENS=10
+  # Raw tokens from the edit itself
+  RAW_TOKENS=$(( (OLD_TOTAL + NEW_TOTAL) / 4 ))
+  if [[ $RAW_TOKENS -lt 10 ]]; then
+    RAW_TOKENS=10
   fi
+  
+  # Apply multiplier to account for untracked context
+  EDIT_TOKENS=$((RAW_TOKENS * TOKEN_MULTIPLIER))
   
   CURRENT_ALLOCATED=$(grep 'Allocated:' "$CONTEXT_LOG" | grep -o '[0-9]*' | head -1 || echo "0")
   if [[ -z "$CURRENT_ALLOCATED" ]]; then

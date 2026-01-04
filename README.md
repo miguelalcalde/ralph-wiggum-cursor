@@ -1,6 +1,6 @@
-# Ralph Wiggum Cursor Skill
+# Ralph Wiggum for Cursor
 
-A Cursor Skill implementing [Geoffrey Huntley's Ralph Wiggum technique](https://ghuntley.com/ralph/) for autonomous AI development with deliberate context management.
+An implementation of [Geoffrey Huntley's Ralph Wiggum technique](https://ghuntley.com/ralph/) for Cursor, using hooks to enable autonomous AI development with deliberate context management and test-driven completion.
 
 > "That's the beauty of Ralph - the technique is deterministically bad in an undeterministic world."
 
@@ -22,6 +22,21 @@ while :; do cat PROMPT.md | npx --yes @sourcegraph/amp ; done
 ```
 
 The same prompt is fed repeatedly to an AI agent. Progress persists in **files and git**, not in the LLM's context window. Each iteration starts fresh, reads the current state from files, and continues the work.
+
+### Test-Driven Completion
+
+The core principle: **tests determine completion, not the agent**.
+
+When the agent thinks it's done, Ralph runs the test command. If tests fail, the agent is forced to continue fixing. The agent cannot mark a task complete until tests actually pass.
+
+```
+Agent checks all boxes
+    ↓
+stop-hook runs test_command
+    ↓
+Tests FAIL? → Block exit, inject failure, force fix
+Tests PASS? → Allow completion
+```
 
 ## The malloc/free Problem
 
@@ -89,6 +104,7 @@ Edit `RALPH_TASK.md`:
 ```markdown
 ---
 task: Build a REST API
+test_command: "npm test"
 completion_criteria:
   - All CRUD endpoints working
   - Tests passing
@@ -107,6 +123,8 @@ max_iterations: 20
 3. [ ] Tests pass
 ```
 
+**Important:** Include a `test_command` that verifies your criteria. Without it, completion is based only on checkboxes.
+
 ### 2. Start Ralph
 
 Open Cursor, new conversation:
@@ -118,6 +136,7 @@ Open Cursor, new conversation:
 Ralph will:
 - Read the task and progress files
 - Work on incomplete criteria
+- Run tests after changes
 - Update `.ralph/progress.md`
 - Commit checkpoints
 - Handle context limits (Cloud or Local mode)
@@ -168,22 +187,30 @@ To continue with fresh context:
 
 ### State Files
 
+
 | File | Purpose |
 |------|---------|
 | `.ralph/state.md` | Current iteration, status |
 | `.ralph/progress.md` | What's been accomplished (survives context reset) |
 | `.ralph/guardrails.md` | "Signs" - lessons from failures |
-| `.ralph/context-log.md` | Tracks context allocations |
+| `.ralph/context-log.md` | Tracks context allocations (estimated) |
+| `.ralph/edits.log` | Raw edit history |
 | `.ralph/failures.md` | Failure patterns for gutter detection |
 
 ### Hooks
 
 | Hook | Trigger | Purpose |
 |------|---------|---------|
-| `beforeSubmitPrompt` | Before each message | Inject guardrails |
+| `beforeSubmitPrompt` | Before each message | Inject guardrails, update state |
 | `beforeReadFile` | File read | Track malloc |
-| `afterFileEdit` | File edited | Log progress |
-| `stop` | Conversation end | Manage iterations |
+| `afterFileEdit` | File edited | Log progress, track malloc |
+| `stop` | Conversation end | Run tests, manage iterations |
+
+### Context Tracking
+
+Ralph estimates context usage by tracking file reads and edits. Since we can't see agent responses, tool calls, or system prompts, we apply a **4x multiplier** to our tracked tokens to approximate actual usage.
+
+This is directional, not precise - but sufficient for detecting when context is getting full.
 
 ## Cloud Mode Setup
 
@@ -208,7 +235,7 @@ export CURSOR_API_KEY='key-here'
 
 Tell Ralph when you're done or stuck:
 
-- `RALPH_COMPLETE: All criteria satisfied` - Task finished
+- `RALPH_COMPLETE: All criteria satisfied` - Task finished (only works if tests pass)
 - `RALPH_GUTTER: Need fresh context` - Stuck in failure loop
 
 ## Learn More

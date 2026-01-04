@@ -4,6 +4,10 @@
 
 set -euo pipefail
 
+# Token multiplier: We only track file reads/edits, but context also includes
+# agent responses, tool calls, system prompts, etc. 4x approximates total usage.
+TOKEN_MULTIPLIER=4
+
 # Cross-platform sed -i
 sedi() {
   if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -35,14 +39,17 @@ fi
 # If content is provided, use it; otherwise estimate from file size
 if [[ -n "$CONTENT" ]]; then
   CONTENT_LENGTH=${#CONTENT}
-  ESTIMATED_TOKENS=$((CONTENT_LENGTH / 4))
+  RAW_TOKENS=$((CONTENT_LENGTH / 4))
 elif [[ -f "$FILE_PATH" ]]; then
   # Fall back to reading file size
   FILE_SIZE=$(wc -c < "$FILE_PATH" 2>/dev/null || echo "0")
-  ESTIMATED_TOKENS=$((FILE_SIZE / 4))
+  RAW_TOKENS=$((FILE_SIZE / 4))
 else
-  ESTIMATED_TOKENS=100  # Default estimate
+  RAW_TOKENS=100  # Default estimate
 fi
+
+# Apply multiplier to account for untracked context (responses, tool calls, etc.)
+ESTIMATED_TOKENS=$((RAW_TOKENS * TOKEN_MULTIPLIER))
 
 # Log the file read
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
