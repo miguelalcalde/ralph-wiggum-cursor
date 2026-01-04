@@ -10,7 +10,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/ralph-common.sh"
 
+# Get absolute path for workspace
 WORKSPACE_ROOT="${1:-.}"
+if [[ "$WORKSPACE_ROOT" == "." ]]; then
+  WORKSPACE_ROOT="$(pwd)"
+fi
+WORKSPACE_ROOT="$(cd "$WORKSPACE_ROOT" && pwd)"
 CONFIG_FILE="$WORKSPACE_ROOT/.cursor/ralph-config.json"
 GLOBAL_CONFIG="$HOME/.cursor/ralph-config.json"
 
