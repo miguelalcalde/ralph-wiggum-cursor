@@ -97,7 +97,7 @@ check_gutter() {
   # Check rotation threshold
   if [[ $tokens -ge $ROTATE_THRESHOLD ]]; then
     log_activity "ROTATE: Token threshold reached ($tokens >= $ROTATE_THRESHOLD)"
-    echo "ROTATE"
+    echo "ROTATE" 2>/dev/null || true
     return
   fi
   
@@ -105,7 +105,7 @@ check_gutter() {
   if [[ $tokens -ge $WARN_THRESHOLD ]] && [[ $WARN_SENT -eq 0 ]]; then
     log_activity "WARN: Approaching token limit ($tokens >= $WARN_THRESHOLD)"
     WARN_SENT=1
-    echo "WARN"
+    echo "WARN" 2>/dev/null || true
   fi
 }
 
@@ -125,7 +125,7 @@ track_shell_failure() {
     
     if [[ $count -ge 3 ]]; then
       log_error "⚠️ GUTTER: same command failed ${count}x"
-      echo "GUTTER"
+      echo "GUTTER" 2>/dev/null || true
     fi
   fi
 }
@@ -148,7 +148,7 @@ track_file_write() {
   # Check for thrashing (5+ writes in 10 minutes)
   if [[ $count -ge 5 ]]; then
     log_error "⚠️ THRASHING: $path written ${count}x in 10 min"
-    echo "GUTTER"
+    echo "GUTTER" 2>/dev/null || true
   fi
 }
 

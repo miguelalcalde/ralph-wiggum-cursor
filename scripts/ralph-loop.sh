@@ -25,9 +25,36 @@ MAX_ITERATIONS=20       # Max rotations before giving up
 WARN_THRESHOLD=70000    # Tokens: send wrapup warning
 ROTATE_THRESHOLD=80000  # Tokens: force rotation
 
+# Model selection (override with RALPH_MODEL env var)
+DEFAULT_MODEL="opus-4.5-thinking"
+MODEL="${RALPH_MODEL:-$DEFAULT_MODEL}"
+
 # =============================================================================
 # HELPERS
 # =============================================================================
+
+# Spinner to show the loop is alive (not frozen)
+spinner() {
+  local workspace="$1"
+  local spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  local i=0
+  while true; do
+    printf "\r  🐛 Agent working... %s  (watch: tail -f %s/.ralph/activity.log)" "${spin:i++%${#spin}:1}" "$workspace"
+    sleep 0.1
+  done
+}
+
+# Log to progress.md (called by the loop, not the agent)
+log_progress() {
+  local workspace="$1"
+  local message="$2"
+  local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+  local progress_file="$workspace/.ralph/progress.md"
+  
+  echo "" >> "$progress_file"
+  echo "### $timestamp" >> "$progress_file"
+  echo "$message" >> "$progress_file"
+}
 
 # Initialize .ralph directory with default files
 init_ralph_dir() {
@@ -124,7 +151,9 @@ Before doing anything:
 
 Ralph's strength is state-in-git, not LLM memory. Commit early and often:
 
-1. After completing each criterion: \`git add -A && git commit -m 'ralph: [criterion]'\`
+1. After completing each criterion: \`git add -A && git commit -m 'ralph: <description>'\`
+   - Example: \`git commit -m 'ralph: implement state tracker with AST parsing'\`
+   - NEVER use placeholder text like '[criterion]' - describe what you actually did
 2. After any significant code change (even partial): commit with descriptive message
 3. Before any risky refactor: commit current state as checkpoint
 4. Push after every 2-3 commits: \`git push\`
@@ -133,11 +162,13 @@ If you get rotated, the next agent picks up from your last commit. Your commits 
 
 ## Task Execution
 
-1. Work on the next unchecked criterion in RALPH_TASK.md
+1. Work on the next unchecked criterion in RALPH_TASK.md (look for \`[ ]\`)
 2. Run tests after changes (check RALPH_TASK.md for test_command)
-3. Check off completed criteria with [x]
+3. **Mark completed criteria**: Edit RALPH_TASK.md and change \`[ ]\` to \`[x]\`
+   - Example: \`- [ ] Implement parser\` becomes \`- [x] Implement parser\`
+   - This is how progress is tracked - YOU MUST update the file
 4. Update \`.ralph/progress.md\` with what you accomplished
-5. When ALL criteria pass: say \`RALPH_COMPLETE\`
+5. When ALL criteria show \`[x]\`: say \`RALPH_COMPLETE\`
 6. If stuck 3+ times on same issue: say \`RALPH_GUTTER\`
 
 ## Learning from Failures
@@ -209,8 +240,11 @@ run_iteration() {
   echo "Monitor:   tail -f $workspace/.ralph/activity.log"
   echo ""
   
+  # Log session start to progress.md
+  log_progress "$workspace" "**Session $iteration started** (model: $MODEL)"
+  
   # Build cursor-agent command
-  local cmd="cursor-agent -p --force --output-format stream-json"
+  local cmd="cursor-agent -p --force --output-format stream-json --model $MODEL"
   
   if [[ -n "$session_id" ]]; then
     echo "Resuming session: $session_id"
@@ -220,6 +254,10 @@ run_iteration() {
   # Run cursor-agent, pipe through stream-parser
   # Parser writes signals (ROTATE, WARN, GUTTER) to fifo
   cd "$workspace"
+  
+  # Start spinner to show we're alive
+  spinner "$workspace" &
+  local spinner_pid=$!
   
   # Start parser in background, reading from cursor-agent
   # Parser outputs to fifo, we read signals from fifo
@@ -233,19 +271,20 @@ run_iteration() {
   while IFS= read -r line < "$fifo"; do
     case "$line" in
       "ROTATE")
-        echo ""
+        printf "\r\033[K"  # Clear spinner line
         echo "🔄 Context rotation triggered - stopping agent..."
         kill $agent_pid 2>/dev/null || true
         signal="ROTATE"
         break
         ;;
       "WARN")
-        echo ""
+        printf "\r\033[K"  # Clear spinner line
         echo "⚠️  Context warning - agent should wrap up soon..."
         # Send interrupt to encourage wrap-up (agent continues but is notified)
+        # Restart spinner display
         ;;
       "GUTTER")
-        echo ""
+        printf "\r\033[K"  # Clear spinner line
         echo "🚨 Gutter detected - agent may be stuck..."
         signal="GUTTER"
         # Don't kill yet, let agent try to recover
@@ -255,6 +294,11 @@ run_iteration() {
   
   # Wait for agent to finish
   wait $agent_pid 2>/dev/null || true
+  
+  # Stop spinner and clear line
+  kill $spinner_pid 2>/dev/null || true
+  wait $spinner_pid 2>/dev/null || true
+  printf "\r\033[K"  # Clear spinner line
   
   # Cleanup
   rm -f "$fifo"
@@ -340,6 +384,7 @@ main() {
   remaining=$((total_criteria - done_criteria))
   
   echo "Progress: $done_criteria / $total_criteria criteria complete ($remaining remaining)"
+  echo "Model:    $MODEL"
   echo ""
   
   if [[ "$remaining" -eq 0 ]] && [[ "$total_criteria" -gt 0 ]]; then
@@ -350,6 +395,9 @@ main() {
   # Confirm before starting
   echo "This will run cursor-agent locally to work on this task."
   echo "The agent will be rotated when context fills up (~80k tokens)."
+  echo ""
+  echo "To use a different model, set RALPH_MODEL:"
+  echo "  RALPH_MODEL=claude-opus-4-20250514 ./ralph-loop.sh"
   echo ""
   read -p "Start Ralph loop? [y/N] " -n 1 -r
   echo ""
@@ -385,6 +433,7 @@ main() {
     task_status=$(check_task_complete "$workspace")
     
     if [[ "$task_status" == "COMPLETE" ]]; then
+      log_progress "$workspace" "**Session $iteration ended** - ✅ TASK COMPLETE"
       echo ""
       echo "═══════════════════════════════════════════════════════════════════"
       echo "🎉 RALPH COMPLETE! All criteria satisfied."
@@ -398,6 +447,7 @@ main() {
     # Handle signals
     case "$signal" in
       "ROTATE")
+        log_progress "$workspace" "**Session $iteration ended** - 🔄 Context rotation (token limit reached)"
         echo ""
         echo "🔄 Rotating to fresh context..."
         iteration=$((iteration + 1))
@@ -406,6 +456,7 @@ main() {
         session_id=""
         ;;
       "GUTTER")
+        log_progress "$workspace" "**Session $iteration ended** - 🚨 GUTTER (agent stuck)"
         echo ""
         echo "🚨 Gutter detected. Check .ralph/errors.log for details."
         echo "   The agent may be stuck. Consider:"
@@ -418,6 +469,7 @@ main() {
         # Agent finished naturally, check if more work needed
         if [[ "$task_status" == INCOMPLETE:* ]]; then
           local remaining_count=${task_status#INCOMPLETE:}
+          log_progress "$workspace" "**Session $iteration ended** - Agent finished naturally ($remaining_count criteria remaining)"
           echo ""
           echo "📋 Agent finished but $remaining_count criteria remaining."
           echo "   Starting next iteration..."
@@ -430,6 +482,7 @@ main() {
     sleep 2
   done
   
+  log_progress "$workspace" "**Loop ended** - ⚠️ Max iterations ($MAX_ITERATIONS) reached"
   echo ""
   echo "⚠️  Max iterations ($MAX_ITERATIONS) reached."
   echo "   Task may not be complete. Check progress manually."
