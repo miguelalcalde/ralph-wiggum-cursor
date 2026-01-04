@@ -20,6 +20,7 @@ A static analyzer that finds race conditions in async TypeScript code before the
 ## The One-Line Success Criterion
 
 For any async function, racecop must answer:
+
 1. What shared state is accessed across await boundaries?
 2. Where can concurrent executions interleave dangerously?
 3. What's the minimal code path that proves the race?
@@ -33,6 +34,7 @@ If you ship that, senior engineers will finally stop saying "it works on my mach
 ## The Problem
 
 Race conditions in async JavaScript/TypeScript are:
+
 - **Silent**: No compiler errors, no runtime exceptions (usually)
 - **Intermittent**: Work 99% of the time, fail in production
 - **Invisible**: No tooling catches them statically
@@ -44,19 +46,20 @@ Race conditions in async JavaScript/TypeScript are:
 // 1. Check-then-act (TOCTOU)
 let cache = null;
 async function getUser() {
-  if (!cache) {                    // CHECK
-    cache = await fetchUser();     // ACT - another call can enter between!
+  if (!cache) {
+    // CHECK
+    cache = await fetchUser(); // ACT - another call can enter between!
   }
   return cache;
 }
 
 // 2. Stale closure
 function SearchBox() {
-  const [query, setQuery] = useState('');
-  
+  const [query, setQuery] = useState("");
+
   useEffect(() => {
-    fetchResults(query).then(results => {
-      setResults(results);  // BUG: query may have changed!
+    fetchResults(query).then((results) => {
+      setResults(results); // BUG: query may have changed!
     });
   }, [query]);
 }
@@ -64,10 +67,11 @@ function SearchBox() {
 // 3. Concurrent writes
 let requestId = 0;
 async function search(term) {
-  requestId++;                     // WRITE
+  requestId++; // WRITE
   const myId = requestId;
   const results = await fetch(term);
-  if (myId === requestId) {        // READ - but requestId changed!
+  if (myId === requestId) {
+    // READ - but requestId changed!
     return results;
   }
 }
@@ -113,22 +117,22 @@ async function search(term) {
 type Confidence = "certain" | "likely" | "possible" | "unlikely";
 
 type RacePattern =
-  | "check-then-act"       // if (!x) { x = await ... }
-  | "concurrent-write"     // multiple async paths write same var
-  | "stale-closure"        // closure captures var, await happens, var changes
-  | "unguarded-init"       // lazy init without lock
-  | "read-after-write"     // read depends on write across await
-  | "toctou";              // time-of-check-time-of-use
+  | "check-then-act" // if (!x) { x = await ... }
+  | "concurrent-write" // multiple async paths write same var
+  | "stale-closure" // closure captures var, await happens, var changes
+  | "unguarded-init" // lazy init without lock
+  | "read-after-write" // read depends on write across await
+  | "toctou"; // time-of-check-time-of-use
 
 interface RaceViolation {
   pattern: RacePattern;
-  confidence: Confidence;           // REQUIRED
-  sharedState: SharedStateRef;      // What variable/property is at risk
-  checkLocation?: SourceLocation;   // Where the "check" happens (if applicable)
-  actLocation: SourceLocation;      // Where the dangerous "act" happens
-  awaitBetween: SourceLocation[];   // Await points in the race window
-  trace: RaceTrace;                 // How to reproduce
-  suggestion?: string;              // Fix suggestion
+  confidence: Confidence; // REQUIRED
+  sharedState: SharedStateRef; // What variable/property is at risk
+  checkLocation?: SourceLocation; // Where the "check" happens (if applicable)
+  actLocation: SourceLocation; // Where the dangerous "act" happens
+  awaitBetween: SourceLocation[]; // Await points in the race window
+  trace: RaceTrace; // How to reproduce
+  suggestion?: string; // Fix suggestion
 }
 ```
 
@@ -141,8 +145,8 @@ interface SharedStateRef {
   name: string;
   scope: StateScope;
   declaredAt: SourceLocation;
-  isMutable: boolean;              // let vs const, but also property writes
-  accessedInAsync: boolean;        // Used in async function/callback
+  isMutable: boolean; // let vs const, but also property writes
+  accessedInAsync: boolean; // Used in async function/callback
 }
 
 interface StateAccess {
@@ -150,7 +154,7 @@ interface StateAccess {
   kind: "read" | "write";
   location: SourceLocation;
   inAsyncContext: boolean;
-  awaitsBefore: SourceLocation[];  // Awaits that happened before this access
+  awaitsBefore: SourceLocation[]; // Awaits that happened before this access
 }
 ```
 
@@ -158,15 +162,15 @@ interface StateAccess {
 
 ```typescript
 interface RaceTrace {
-  scenario: string;                 // Human-readable "what goes wrong"
-  timeline: TraceEvent[];           // Interleaved execution showing the race
+  scenario: string; // Human-readable "what goes wrong"
+  timeline: TraceEvent[]; // Interleaved execution showing the race
 }
 
 interface TraceEvent {
-  execution: "A" | "B";             // Which concurrent execution
-  action: string;                   // What happens
+  execution: "A" | "B"; // Which concurrent execution
+  action: string; // What happens
   location: SourceLocation;
-  stateSnapshot?: Record<string, string>;  // State after this event
+  stateSnapshot?: Record<string, string>; // State after this event
 }
 ```
 
@@ -175,7 +179,7 @@ interface TraceEvent {
 ```typescript
 interface AnalyzeResult {
   violations: RaceViolation[];
-  sharedState: SharedStateRef[];    // All shared state found
+  sharedState: SharedStateRef[]; // All shared state found
   asyncFunctions: AsyncFunctionInfo[];
   files: string[];
   summary: {
@@ -196,7 +200,8 @@ interface AnalyzeResult {
 // RACE: Another call can enter between check and assignment
 let cache = null;
 async function getData() {
-  if (!cache) {           // CHECK
+  if (!cache) {
+    // CHECK
     cache = await fetch(); // ACT
   }
   return cache;
@@ -204,6 +209,7 @@ async function getData() {
 ```
 
 **Detection:**
+
 1. Find `if (!var)` or `if (var === null)` checks
 2. Check if the body contains `await`
 3. Check if `var` is assigned after the await
@@ -215,13 +221,14 @@ async function getData() {
 // RACE: Concurrent calls increment, overwriting each other
 let counter = 0;
 async function increment() {
-  const current = counter;    // READ
+  const current = counter; // READ
   await delay(100);
-  counter = current + 1;      // WRITE - stale!
+  counter = current + 1; // WRITE - stale!
 }
 ```
 
 **Detection:**
+
 1. Find read of shared state
 2. Find write of same state after await
 3. If write depends on the read → concurrent write race
@@ -231,8 +238,9 @@ async function increment() {
 ```typescript
 // RACE: Closure captures query, but query changes during await
 function search(query) {
-  fetchResults(query).then(results => {
-    if (query === currentQuery) {  // query is STALE
+  fetchResults(query).then((results) => {
+    if (query === currentQuery) {
+      // query is STALE
       setResults(results);
     }
   });
@@ -240,6 +248,7 @@ function search(query) {
 ```
 
 **Detection:**
+
 1. Find closure/callback passed to async operation
 2. Find variables from outer scope used in closure
 3. Check if outer variable can change while async is pending
@@ -252,13 +261,14 @@ function search(query) {
 let promise = null;
 async function getSingleton() {
   if (!promise) {
-    promise = createAsync();  // Should assign BEFORE await
+    promise = createAsync(); // Should assign BEFORE await
   }
-  return await promise;       // Multiple instances created!
+  return await promise; // Multiple instances created!
 }
 ```
 
 **Detection:**
+
 1. Find lazy init pattern with async
 2. Check if promise/lock is set AFTER await vs BEFORE
 3. If after → unguarded init race
@@ -272,13 +282,15 @@ async function search(term) {
   requestId++;
   const myId = requestId;
   const results = await fetch(term);
-  if (myId === requestId) {  // requestId may have changed!
+  if (myId === requestId) {
+    // requestId may have changed!
     return results;
   }
 }
 ```
 
 **Detection:**
+
 1. Find write to shared state
 2. Find read of same state after await
 3. Check if logic depends on them being equal → dependency race
@@ -288,6 +300,7 @@ async function search(term) {
 ## Success Criteria
 
 ### Phase 1: Core Foundation (Pure Layer)
+
 1. [ ] Parse TypeScript files using Compiler API
 2. [ ] Identify async functions and methods
 3. [ ] Find all `await` expressions and their locations
@@ -296,6 +309,7 @@ async function search(term) {
 6. [ ] Core is pure: no I/O, no CLI, just data in → data out
 
 ### Phase 2: Check-Then-Act Detection
+
 7. [ ] Detect `if (!var)` and `if (var == null)` patterns
 8. [ ] Check if await exists between check and modification
 9. [ ] Generate check-then-act violations with correct locations
@@ -303,6 +317,7 @@ async function search(term) {
 11. [ ] Generate human-readable trace showing the race
 
 ### Phase 3: Concurrent Write Detection
+
 12. [ ] Detect read of shared state
 13. [ ] Detect write to same state after await
 14. [ ] Flag when write depends on earlier read (stale read)
@@ -310,6 +325,7 @@ async function search(term) {
 16. [ ] Generate concurrent-write violations
 
 ### Phase 4: Stale Closure Detection
+
 17. [ ] Detect closures passed to Promise.then, setTimeout, event handlers
 18. [ ] Identify variables captured from outer scope
 19. [ ] Check if captured variables can change during async gap
@@ -317,6 +333,7 @@ async function search(term) {
 21. [ ] Special handling for React useEffect patterns
 
 ### Phase 5: Advanced Patterns
+
 22. [ ] Detect unguarded lazy initialization
 23. [ ] Detect read-after-write dependency races
 24. [ ] Handle Promise.all with dependent operations
@@ -324,6 +341,7 @@ async function search(term) {
 26. [ ] Track state across multiple awaits in sequence
 
 ### Phase 6: CLI Adapter
+
 27. [ ] `racecop analyze <path>` - analyze files/directory
 28. [ ] `racecop analyze --function <name>` - analyze specific function
 29. [ ] `--output json` - machine-readable output
@@ -332,6 +350,7 @@ async function search(term) {
 32. [ ] Exit code 1 if certain/likely races found, 0 otherwise
 
 ### Phase 7: Polish & Edge Cases
+
 33. [ ] Handle try/catch around await (doesn't prevent race)
 34. [ ] Detect races in class methods with `this` state
 35. [ ] Handle async generators
@@ -343,6 +362,7 @@ async function search(term) {
 ## MANDATORY TEST CASES
 
 ### Test 1: Basic Check-Then-Act
+
 ```typescript
 // test/fixtures/check-then-act.ts
 let cache: string | null = null;
@@ -360,8 +380,11 @@ async function fetchData(): Promise<string> {
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/check-then-act.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/check-then-act.ts --output json"
+).toString();
 assert(output.length > 10, "CLI must produce output");
 
 const result = JSON.parse(output);
@@ -369,7 +392,10 @@ assert(result.violations.length > 0, "Must find violations");
 
 const race = result.violations[0];
 assert(race.pattern === "check-then-act", "Pattern must be check-then-act");
-assert(race.confidence === "certain" || race.confidence === "likely", "Must have high confidence");
+assert(
+  race.confidence === "certain" || race.confidence === "likely",
+  "Must have high confidence"
+);
 assert(race.sharedState.name === "cache", "Shared state must be cache");
 assert(race.awaitBetween.length > 0, "Must show await in race window");
 ```
@@ -377,6 +403,7 @@ assert(race.awaitBetween.length > 0, "Must show await in race window");
 ---
 
 ### Test 2: Concurrent Write (Stale Read)
+
 ```typescript
 // test/fixtures/concurrent-write.ts
 let counter = 0;
@@ -389,16 +416,19 @@ export async function increment(): Promise<number> {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/concurrent-write.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/concurrent-write.ts --output json"
+).toString();
 const result = JSON.parse(output);
 
-const race = result.violations.find(v => v.pattern === "concurrent-write");
+const race = result.violations.find((v) => v.pattern === "concurrent-write");
 assert(race, "Must find concurrent-write violation");
 assert(race.sharedState.name === "counter", "Shared state must be counter");
 
@@ -409,14 +439,15 @@ assert(race.trace.timeline.length >= 2, "Trace must show interleaving");
 ---
 
 ### Test 3: Stale Closure
+
 ```typescript
 // test/fixtures/stale-closure.ts
 let currentQuery = "";
 
 export function search(query: string): void {
   currentQuery = query;
-  
-  fetchResults(query).then(results => {
+
+  fetchResults(query).then((results) => {
     // BUG: currentQuery may have changed!
     if (query === currentQuery) {
       console.log("Results:", results);
@@ -430,18 +461,25 @@ async function fetchResults(q: string): Promise<string[]> {
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/stale-closure.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/stale-closure.ts --output json"
+).toString();
 const result = JSON.parse(output);
 
-const race = result.violations.find(v => v.pattern === "stale-closure");
+const race = result.violations.find((v) => v.pattern === "stale-closure");
 assert(race, "Must find stale-closure violation");
-assert(race.sharedState.name === "currentQuery", "Must identify currentQuery as stale");
+assert(
+  race.sharedState.name === "currentQuery",
+  "Must identify currentQuery as stale"
+);
 ```
 
 ---
 
 ### Test 4: Unguarded Lazy Init
+
 ```typescript
 // test/fixtures/unguarded-init.ts
 let singletonPromise: Promise<Service> | null = null;
@@ -455,24 +493,32 @@ export async function getSingleton(): Promise<Service> {
   return singletonPromise;
 }
 
-interface Service { id: number }
+interface Service {
+  id: number;
+}
 async function createService(): Promise<Service> {
   return { id: Math.random() };
 }
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/unguarded-init.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/unguarded-init.ts --output json"
+).toString();
 const result = JSON.parse(output);
 
-const race = result.violations.find(v => v.pattern === "unguarded-init" || v.pattern === "check-then-act");
+const race = result.violations.find(
+  (v) => v.pattern === "unguarded-init" || v.pattern === "check-then-act"
+);
 assert(race, "Must find unguarded init violation");
 ```
 
 ---
 
 ### Test 5: Safe Pattern (No Violation)
+
 ```typescript
 // test/fixtures/safe-init.ts
 let singletonPromise: Promise<Service> | null = null;
@@ -485,21 +531,26 @@ export async function getSafeSingleton(): Promise<Service> {
   return singletonPromise;
 }
 
-interface Service { id: number }
+interface Service {
+  id: number;
+}
 async function createService(): Promise<Service> {
   return { id: 1 };
 }
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/safe-init.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/safe-init.ts --output json"
+).toString();
 const result = JSON.parse(output);
 
 // This pattern is SAFE - no check-then-act because promise is assigned before await
-const violations = result.violations.filter(v => 
-  v.pattern === "check-then-act" && 
-  v.sharedState.name === "singletonPromise"
+const violations = result.violations.filter(
+  (v) =>
+    v.pattern === "check-then-act" && v.sharedState.name === "singletonPromise"
 );
 assert(violations.length === 0, "Safe singleton pattern should not be flagged");
 ```
@@ -507,6 +558,7 @@ assert(violations.length === 0, "Safe singleton pattern should not be flagged");
 ---
 
 ### Test 6: Request ID Pattern
+
 ```typescript
 // test/fixtures/request-id.ts
 let requestId = 0;
@@ -515,7 +567,7 @@ export async function search(term: string): Promise<string[] | null> {
   requestId++;
   const myId = requestId;
   const results = await fetchResults(term);
-  
+
   // BUG: requestId may have changed during await
   if (myId === requestId) {
     return results;
@@ -529,11 +581,14 @@ async function fetchResults(term: string): Promise<string[]> {
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/request-id.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/request-id.ts --output json"
+).toString();
 const result = JSON.parse(output);
 
-const race = result.violations.find(v => v.pattern === "read-after-write");
+const race = result.violations.find((v) => v.pattern === "read-after-write");
 assert(race, "Must find read-after-write violation");
 assert(race.sharedState.name === "requestId", "Must identify requestId");
 ```
@@ -541,18 +596,19 @@ assert(race.sharedState.name === "requestId", "Must identify requestId");
 ---
 
 ### Test 7: Class Instance State
+
 ```typescript
 // test/fixtures/class-state.ts
 export class DataFetcher {
   private cache: Map<string, string> | null = null;
-  
+
   async getData(key: string): Promise<string | undefined> {
     if (!this.cache) {
       this.cache = await this.loadCache();
     }
     return this.cache.get(key);
   }
-  
+
   private async loadCache(): Promise<Map<string, string>> {
     return new Map([["key", "value"]]);
   }
@@ -560,18 +616,27 @@ export class DataFetcher {
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/class-state.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/class-state.ts --output json"
+).toString();
 const result = JSON.parse(output);
 
-const race = result.violations.find(v => v.sharedState.name.includes("cache"));
+const race = result.violations.find((v) =>
+  v.sharedState.name.includes("cache")
+);
 assert(race, "Must find race on this.cache");
-assert(race.sharedState.scope === "object-property", "Must identify as object property");
+assert(
+  race.sharedState.scope === "object-property",
+  "Must identify as object property"
+);
 ```
 
 ---
 
 ### Test 8: React useEffect Pattern
+
 ```typescript
 // test/fixtures/react-effect.ts
 // Simulating React hooks pattern
@@ -579,8 +644,8 @@ type SetState<T> = (value: T) => void;
 
 export function useSearch(query: string, setResults: SetState<string[]>) {
   // This is the classic stale closure bug in React
-  fetchResults(query).then(results => {
-    setResults(results);  // query may be stale!
+  fetchResults(query).then((results) => {
+    setResults(results); // query may be stale!
   });
 }
 
@@ -590,13 +655,16 @@ async function fetchResults(q: string): Promise<string[]> {
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/react-effect.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/react-effect.ts --output json"
+).toString();
 const result = JSON.parse(output);
 
 // Should detect potential stale closure with query
-const staleWarning = result.violations.find(v => 
-  v.pattern === "stale-closure" && v.confidence !== "unlikely"
+const staleWarning = result.violations.find(
+  (v) => v.pattern === "stale-closure" && v.confidence !== "unlikely"
 );
 // This is a softer check - may be "possible" confidence since we don't know if query changes
 assert(result.violations.length >= 0, "Should analyze without crashing");
@@ -605,6 +673,7 @@ assert(result.violations.length >= 0, "Should analyze without crashing");
 ---
 
 ### Test 9: Multiple Awaits in Sequence
+
 ```typescript
 // test/fixtures/multi-await.ts
 let state = { step: 0 };
@@ -612,10 +681,10 @@ let state = { step: 0 };
 export async function multiStep(): Promise<void> {
   state.step = 1;
   await step1();
-  
-  state.step = 2;  // Race: state.step could have been modified by another call
+
+  state.step = 2; // Race: state.step could have been modified by another call
   await step2();
-  
+
   state.step = 3;
   await step3();
 }
@@ -626,49 +695,71 @@ async function step3(): Promise<void> {}
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/multi-await.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/multi-await.ts --output json"
+).toString();
 const result = JSON.parse(output);
 
 // Should find multiple race windows
-assert(result.violations.length >= 1, "Must find violations in multi-await sequence");
+assert(
+  result.violations.length >= 1,
+  "Must find violations in multi-await sequence"
+);
 
 // Should track state.step as shared
-const stateRefs = result.sharedState.filter(s => s.name.includes("step") || s.name.includes("state"));
+const stateRefs = result.sharedState.filter(
+  (s) => s.name.includes("step") || s.name.includes("state")
+);
 assert(stateRefs.length > 0, "Must identify state.step as shared");
 ```
 
 ---
 
 ### Test 10: Summary Statistics
+
 ```typescript
 // test/fixtures/mixed.ts
 let a = 0;
 let b = 0;
 
 export async function raceA(): Promise<void> {
-  if (!a) { a = await getA(); }  // check-then-act
+  if (!a) {
+    a = await getA();
+  } // check-then-act
 }
 
 export async function raceB(): Promise<void> {
   const old = b;
   await delay();
-  b = old + 1;  // concurrent-write
+  b = old + 1; // concurrent-write
 }
 
-async function getA(): Promise<number> { return 1; }
+async function getA(): Promise<number> {
+  return 1;
+}
 async function delay(): Promise<void> {}
 ```
 
 **Test assertions:**
+
 ```javascript
-const output = execSync('node dist/index.js analyze test/fixtures/mixed.ts --output json').toString();
+const output = execSync(
+  "node dist/index.js analyze test/fixtures/mixed.ts --output json"
+).toString();
 const result = JSON.parse(output);
 
 assert(result.summary, "Must have summary");
 assert(result.summary.total >= 2, "Must find at least 2 violations");
-assert(result.summary.byPattern["check-then-act"] >= 1, "Must count check-then-act");
-assert(result.summary.byPattern["concurrent-write"] >= 1, "Must count concurrent-write");
+assert(
+  result.summary.byPattern["check-then-act"] >= 1,
+  "Must count check-then-act"
+);
+assert(
+  result.summary.byPattern["concurrent-write"] >= 1,
+  "Must count concurrent-write"
+);
 ```
 
 ---
@@ -722,6 +813,7 @@ racecop/
 ## Example Output
 
 ### Pretty Output
+
 ```
 $ racecop analyze src/ --output pretty
 
@@ -731,11 +823,11 @@ $ racecop analyze src/ --output pretty
 🔴 CERTAIN: Check-Then-Act Race
    Location: src/cache.ts:15
    Shared State: cache (module scope)
-   
+
    The check `if (!cache)` and assignment `cache = await ...`
    have an await between them. Concurrent calls can both
    see cache as null and fetch duplicate data.
-   
+
    Timeline:
    ┌─────────┬────────────────────────────────────┐
    │ Call A  │ if (!cache) → true                 │
@@ -743,7 +835,7 @@ $ racecop analyze src/ --output pretty
    │ Call A  │ cache = await fetch() → "data1"    │
    │ Call B  │ cache = await fetch() → "data2"    │ ← overwrites!
    └─────────┴────────────────────────────────────┘
-   
+
    💡 Fix: Assign promise before await:
       if (!cache) {
         cache = fetchData();  // assign promise, not result
@@ -754,7 +846,7 @@ $ racecop analyze src/ --output pretty
 
 Summary: 3 races found
   🔴 Certain: 1
-  🟠 Likely:  1  
+  🟠 Likely:  1
   🟡 Possible: 1
 ```
 

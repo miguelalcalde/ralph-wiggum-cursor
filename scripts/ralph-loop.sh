@@ -1,7 +1,8 @@
 #!/bin/bash
-# Ralph Wiggum: The Loop
-# 
-# This is the TRUE Ralph - a loop that keeps spawning agents until the task is done.
+# Ralph Wiggum: The Loop (CLI Mode)
+#
+# Runs cursor-agent locally with stream-json parsing for accurate token tracking.
+# Handles context rotation via --resume when thresholds are hit.
 #
 # Usage:
 #   ./ralph-loop.sh                    # Start from current directory
@@ -9,36 +10,256 @@
 #
 # Requirements:
 #   - RALPH_TASK.md in the project root
-#   - Git repository with GitHub remote
-#   - CURSOR_API_KEY or ~/.cursor/ralph-config.json
+#   - Git repository
+#   - cursor-agent CLI installed
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/ralph-common.sh"
 
 # =============================================================================
-# CONFIGURATION  
+# CONFIGURATION
 # =============================================================================
 
-CONFIG_FILE="${1:-.}/.cursor/ralph-config.json"
-GLOBAL_CONFIG="$HOME/.cursor/ralph-config.json"
+MAX_ITERATIONS=20       # Max rotations before giving up
+WARN_THRESHOLD=70000    # Tokens: send wrapup warning
+ROTATE_THRESHOLD=80000  # Tokens: force rotation
 
 # =============================================================================
 # HELPERS
 # =============================================================================
 
-get_api_key() {
-  if [[ -n "${CURSOR_API_KEY:-}" ]]; then echo "$CURSOR_API_KEY" && return 0; fi
-  if [[ -f "$CONFIG_FILE" ]]; then
-    KEY=$(jq -r '.cursor_api_key // empty' "$CONFIG_FILE" 2>/dev/null || echo "")
-    if [[ -n "$KEY" ]]; then echo "$KEY" && return 0; fi
+# Initialize .ralph directory with default files
+init_ralph_dir() {
+  local workspace="$1"
+  local ralph_dir="$workspace/.ralph"
+  
+  mkdir -p "$ralph_dir"
+  
+  # Initialize progress.md if it doesn't exist
+  if [[ ! -f "$ralph_dir/progress.md" ]]; then
+    cat > "$ralph_dir/progress.md" << 'EOF'
+# Progress Log
+
+> Updated by the agent after significant work.
+
+---
+
+## Session History
+
+EOF
   fi
-  if [[ -f "$GLOBAL_CONFIG" ]]; then
-    KEY=$(jq -r '.cursor_api_key // empty' "$GLOBAL_CONFIG" 2>/dev/null || echo "")
-    if [[ -n "$KEY" ]]; then echo "$KEY" && return 0; fi
+  
+  # Initialize guardrails.md if it doesn't exist
+  if [[ ! -f "$ralph_dir/guardrails.md" ]]; then
+    cat > "$ralph_dir/guardrails.md" << 'EOF'
+# Ralph Guardrails (Signs)
+
+> Lessons learned from past failures. READ THESE BEFORE ACTING.
+
+## Core Signs
+
+### Sign: Read Before Writing
+- **Trigger**: Before modifying any file
+- **Instruction**: Always read the existing file first
+- **Added after**: Core principle
+
+### Sign: Test After Changes
+- **Trigger**: After any code change
+- **Instruction**: Run tests to verify nothing broke
+- **Added after**: Core principle
+
+### Sign: Commit Checkpoints
+- **Trigger**: Before risky changes
+- **Instruction**: Commit current working state first
+- **Added after**: Core principle
+
+---
+
+## Learned Signs
+
+EOF
   fi
-  return 1
+  
+  # Initialize errors.log if it doesn't exist
+  if [[ ! -f "$ralph_dir/errors.log" ]]; then
+    cat > "$ralph_dir/errors.log" << 'EOF'
+# Error Log
+
+> Failures detected by stream-parser. Use to update guardrails.
+
+EOF
+  fi
+  
+  # Initialize activity.log if it doesn't exist
+  if [[ ! -f "$ralph_dir/activity.log" ]]; then
+    cat > "$ralph_dir/activity.log" << 'EOF'
+# Activity Log
+
+> Real-time tool call logging from stream-parser.
+
+EOF
+  fi
+}
+
+# Build the Ralph prompt
+build_prompt() {
+  local workspace="$1"
+  local iteration="$2"
+  
+  cat << EOF
+# Ralph Iteration $iteration
+
+You are an autonomous development agent using the Ralph methodology.
+
+## FIRST: Read State Files
+
+Before doing anything:
+1. Read \`RALPH_TASK.md\` - your task and completion criteria
+2. Read \`.ralph/guardrails.md\` - lessons from past failures (FOLLOW THESE)
+3. Read \`.ralph/progress.md\` - what's been accomplished
+4. Read \`.ralph/errors.log\` - recent failures to avoid
+
+## Git Protocol (Critical)
+
+Ralph's strength is state-in-git, not LLM memory. Commit early and often:
+
+1. After completing each criterion: \`git add -A && git commit -m 'ralph: [criterion]'\`
+2. After any significant code change (even partial): commit with descriptive message
+3. Before any risky refactor: commit current state as checkpoint
+4. Push after every 2-3 commits: \`git push\`
+
+If you get rotated, the next agent picks up from your last commit. Your commits ARE your memory.
+
+## Task Execution
+
+1. Work on the next unchecked criterion in RALPH_TASK.md
+2. Run tests after changes (check RALPH_TASK.md for test_command)
+3. Check off completed criteria with [x]
+4. Update \`.ralph/progress.md\` with what you accomplished
+5. When ALL criteria pass: say \`RALPH_COMPLETE\`
+6. If stuck 3+ times on same issue: say \`RALPH_GUTTER\`
+
+## Learning from Failures
+
+When something fails:
+1. Check \`.ralph/errors.log\` for failure history
+2. Figure out the root cause
+3. Add a Sign to \`.ralph/guardrails.md\` using this format:
+
+\`\`\`
+### Sign: [Descriptive Name]
+- **Trigger**: When this situation occurs
+- **Instruction**: What to do instead
+- **Added after**: Iteration $iteration - what happened
+\`\`\`
+
+## Context Rotation Warning
+
+You may receive a warning that context is running low. When you see it:
+1. Finish your current file edit
+2. Commit and push your changes
+3. Update .ralph/progress.md with what you accomplished and what's next
+4. You will be rotated to a fresh agent that continues your work
+
+Begin by reading the state files.
+EOF
+}
+
+# Check if task is complete
+check_task_complete() {
+  local workspace="$1"
+  local task_file="$workspace/RALPH_TASK.md"
+  
+  if [[ ! -f "$task_file" ]]; then
+    echo "NO_TASK_FILE"
+    return
+  fi
+  
+  local unchecked
+  unchecked=$(grep -c '\[ \]' "$task_file" 2>/dev/null) || unchecked=0
+  
+  if [[ "$unchecked" -eq 0 ]]; then
+    echo "COMPLETE"
+  else
+    echo "INCOMPLETE:$unchecked"
+  fi
+}
+
+# Run a single agent iteration
+run_iteration() {
+  local workspace="$1"
+  local iteration="$2"
+  local session_id="${3:-}"
+  
+  local prompt=$(build_prompt "$workspace" "$iteration")
+  local parser_output
+  local fifo="$workspace/.ralph/.parser_fifo"
+  
+  # Create named pipe for parser signals
+  rm -f "$fifo"
+  mkfifo "$fifo"
+  
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════════"
+  echo "🐛 Ralph Iteration $iteration"
+  echo "═══════════════════════════════════════════════════════════════════"
+  echo ""
+  echo "Workspace: $workspace"
+  echo "Monitor:   tail -f $workspace/.ralph/activity.log"
+  echo ""
+  
+  # Build cursor-agent command
+  local cmd="cursor-agent -p --force --output-format stream-json"
+  
+  if [[ -n "$session_id" ]]; then
+    echo "Resuming session: $session_id"
+    cmd="$cmd --resume=\"$session_id\""
+  fi
+  
+  # Run cursor-agent, pipe through stream-parser
+  # Parser writes signals (ROTATE, WARN, GUTTER) to fifo
+  cd "$workspace"
+  
+  # Start parser in background, reading from cursor-agent
+  # Parser outputs to fifo, we read signals from fifo
+  (
+    eval "$cmd \"$prompt\"" 2>&1 | "$SCRIPT_DIR/stream-parser.sh" "$workspace" > "$fifo"
+  ) &
+  local agent_pid=$!
+  
+  # Read signals from parser
+  local signal=""
+  while IFS= read -r line < "$fifo"; do
+    case "$line" in
+      "ROTATE")
+        echo ""
+        echo "🔄 Context rotation triggered - stopping agent..."
+        kill $agent_pid 2>/dev/null || true
+        signal="ROTATE"
+        break
+        ;;
+      "WARN")
+        echo ""
+        echo "⚠️  Context warning - agent should wrap up soon..."
+        # Send interrupt to encourage wrap-up (agent continues but is notified)
+        ;;
+      "GUTTER")
+        echo ""
+        echo "🚨 Gutter detected - agent may be stuck..."
+        signal="GUTTER"
+        # Don't kill yet, let agent try to recover
+        ;;
+    esac
+  done
+  
+  # Wait for agent to finish
+  wait $agent_pid 2>/dev/null || true
+  
+  # Cleanup
+  rm -f "$fifo"
+  
+  echo "$signal"
 }
 
 # =============================================================================
@@ -46,16 +267,16 @@ get_api_key() {
 # =============================================================================
 
 main() {
-  WORKSPACE="${1:-.}"
-  if [[ "$WORKSPACE" == "." ]]; then
-    WORKSPACE="$(pwd)"
+  local workspace="${1:-.}"
+  if [[ "$workspace" == "." ]]; then
+    workspace="$(pwd)"
   fi
-  WORKSPACE="$(cd "$WORKSPACE" && pwd)"
+  workspace="$(cd "$workspace" && pwd)"
   
-  TASK_FILE="$WORKSPACE/RALPH_TASK.md"
+  local task_file="$workspace/RALPH_TASK.md"
   
   echo "═══════════════════════════════════════════════════════════════════"
-  echo "🐛 Ralph Wiggum: The Loop"
+  echo "🐛 Ralph Wiggum: The Loop (CLI Mode)"
   echo "═══════════════════════════════════════════════════════════════════"
   echo ""
   echo "  \"That's the beauty of Ralph - the technique is deterministically"
@@ -65,8 +286,8 @@ main() {
   echo ""
   
   # Check prerequisites
-  if [[ ! -f "$TASK_FILE" ]]; then
-    echo "❌ No RALPH_TASK.md found in $WORKSPACE"
+  if [[ ! -f "$task_file" ]]; then
+    echo "❌ No RALPH_TASK.md found in $workspace"
     echo ""
     echo "Create a task file first:"
     echo "  cat > RALPH_TASK.md << 'EOF'"
@@ -82,60 +303,53 @@ main() {
     exit 1
   fi
   
-  API_KEY=$(get_api_key) || {
-    echo "❌ No Cursor API key configured"
+  # Check for cursor-agent CLI
+  if ! command -v cursor-agent &> /dev/null; then
+    echo "❌ cursor-agent CLI not found"
     echo ""
-    echo "Configure via:"
-    echo "  export CURSOR_API_KEY='your-key'"
-    echo "  # or"
-    echo "  echo '{\"cursor_api_key\": \"key\"}' > ~/.cursor/ralph-config.json"
-    echo ""
-    echo "Get your key from: https://cursor.com/dashboard?tab=integrations"
+    echo "Install via:"
+    echo "  curl https://cursor.com/install -fsS | bash"
     exit 1
-  }
+  fi
   
+  # Check for git repo
   if ! git rev-parse --git-dir > /dev/null 2>&1; then
     echo "❌ Not a git repository"
-    echo "   Ralph Cloud requires a GitHub repository."
+    echo "   Ralph requires git for state persistence."
     exit 1
   fi
   
-  REPO_URL=$(git remote get-url origin 2>/dev/null || echo "")
-  if [[ -z "$REPO_URL" ]]; then
-    echo "❌ No git remote 'origin' configured"
-    echo "   Run: git remote add origin https://github.com/you/repo"
-    exit 1
-  fi
+  # Initialize .ralph directory
+  init_ralph_dir "$workspace"
   
-  echo "Workspace: $WORKSPACE"
-  echo "Task:      $TASK_FILE"
-  echo "Repo:      $REPO_URL"
+  echo "Workspace: $workspace"
+  echo "Task:      $task_file"
   echo ""
   
   # Show task summary
   echo "📋 Task Summary:"
   echo "─────────────────────────────────────────────────────────────────"
-  head -30 "$TASK_FILE"
+  head -30 "$task_file"
   echo "─────────────────────────────────────────────────────────────────"
   echo ""
   
-  # Count criteria (supports both "- [ ]" and "1. [ ]" formats)
-  # Note: || must be OUTSIDE $() to avoid capturing both grep output and echo
-  TOTAL_CRITERIA=$(grep -cE '\[ \]|\[x\]' "$TASK_FILE" 2>/dev/null) || TOTAL_CRITERIA=0
-  DONE_CRITERIA=$(grep -c '\[x\]' "$TASK_FILE" 2>/dev/null) || DONE_CRITERIA=0
-  REMAINING=$((TOTAL_CRITERIA - DONE_CRITERIA))
+  # Count criteria
+  local total_criteria done_criteria remaining
+  total_criteria=$(grep -cE '\[ \]|\[x\]' "$task_file" 2>/dev/null) || total_criteria=0
+  done_criteria=$(grep -c '\[x\]' "$task_file" 2>/dev/null) || done_criteria=0
+  remaining=$((total_criteria - done_criteria))
   
-  echo "Progress: $DONE_CRITERIA / $TOTAL_CRITERIA criteria complete ($REMAINING remaining)"
+  echo "Progress: $done_criteria / $total_criteria criteria complete ($remaining remaining)"
   echo ""
   
-  if [[ "$REMAINING" -eq 0 ]] && [[ "$TOTAL_CRITERIA" -gt 0 ]]; then
+  if [[ "$remaining" -eq 0 ]] && [[ "$total_criteria" -gt 0 ]]; then
     echo "🎉 Task already complete! All criteria are checked."
     exit 0
   fi
   
   # Confirm before starting
-  echo "This will spawn Cloud Agents to work on this task autonomously."
-  echo "Agents will be chained until the task is complete (or max depth reached)."
+  echo "This will run cursor-agent locally to work on this task."
+  echo "The agent will be rotated when context fills up (~80k tokens)."
   echo ""
   read -p "Start Ralph loop? [y/N] " -n 1 -r
   echo ""
@@ -150,35 +364,76 @@ main() {
   echo ""
   
   # Commit any uncommitted work first
-  cd "$WORKSPACE"
+  cd "$workspace"
   if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
     echo "📦 Committing uncommitted changes..."
     git add -A
     git commit -m "ralph: initial commit before loop" || true
-    git push origin HEAD 2>/dev/null || true
   fi
   
-  # Spawn first agent
+  # Main loop
+  local iteration=1
+  local session_id=""
+  
+  while [[ $iteration -le $MAX_ITERATIONS ]]; do
+    # Run iteration
+    local signal
+    signal=$(run_iteration "$workspace" "$iteration" "$session_id")
+    
+    # Check task completion
+    local task_status
+    task_status=$(check_task_complete "$workspace")
+    
+    if [[ "$task_status" == "COMPLETE" ]]; then
+      echo ""
+      echo "═══════════════════════════════════════════════════════════════════"
+      echo "🎉 RALPH COMPLETE! All criteria satisfied."
+      echo "═══════════════════════════════════════════════════════════════════"
+      echo ""
+      echo "Completed in $iteration iteration(s)."
+      echo "Check git log for detailed history."
+      exit 0
+    fi
+    
+    # Handle signals
+    case "$signal" in
+      "ROTATE")
+        echo ""
+        echo "🔄 Rotating to fresh context..."
+        iteration=$((iteration + 1))
+        # TODO: Extract session ID for --resume
+        # For now, start fresh each iteration (state is in files/git)
+        session_id=""
+        ;;
+      "GUTTER")
+        echo ""
+        echo "🚨 Gutter detected. Check .ralph/errors.log for details."
+        echo "   The agent may be stuck. Consider:"
+        echo "   1. Check .ralph/guardrails.md for lessons"
+        echo "   2. Manually fix the blocking issue"
+        echo "   3. Re-run the loop"
+        exit 1
+        ;;
+      *)
+        # Agent finished naturally, check if more work needed
+        if [[ "$task_status" == INCOMPLETE:* ]]; then
+          local remaining_count=${task_status#INCOMPLETE:}
+          echo ""
+          echo "📋 Agent finished but $remaining_count criteria remaining."
+          echo "   Starting next iteration..."
+          iteration=$((iteration + 1))
+        fi
+        ;;
+    esac
+    
+    # Brief pause between iterations
+    sleep 2
+  done
+  
   echo ""
-  SPAWN_OUTPUT=$("$SCRIPT_DIR/spawn-cloud-agent.sh" "$WORKSPACE" 2>&1)
-  echo "$SPAWN_OUTPUT"
-  
-  AGENT_ID=$(echo "$SPAWN_OUTPUT" | grep "Agent ID:" | awk '{print $NF}')
-  
-  if [[ -z "$AGENT_ID" ]]; then
-    echo ""
-    echo "❌ Failed to spawn initial agent"
-    exit 1
-  fi
-  
-  echo ""
-  echo "═══════════════════════════════════════════════════════════════════"
-  echo "🔁 Entering watch loop..."
-  echo "═══════════════════════════════════════════════════════════════════"
-  echo ""
-  
-  # Start the watcher
-  "$SCRIPT_DIR/watch-cloud-agent.sh" "$AGENT_ID" "$WORKSPACE"
+  echo "⚠️  Max iterations ($MAX_ITERATIONS) reached."
+  echo "   Task may not be complete. Check progress manually."
+  exit 1
 }
 
 main "$@"
