@@ -36,8 +36,16 @@ This creates two problems:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      ralph-loop.sh                           │
+│                      ralph-setup.sh                          │
 │                           │                                  │
+│              ┌────────────┴────────────┐                    │
+│              ▼                         ▼                    │
+│         [gum UI]                  [fallback]                │
+│     Model selection            Simple prompts               │
+│     Max iterations                                          │
+│     Options (branch, PR)                                    │
+│              │                         │                    │
+│              └────────────┬────────────┘                    │
 │                           ▼                                  │
 │    cursor-agent -p --force --output-format stream-json       │
 │                           │                                  │
@@ -45,23 +53,24 @@ This creates two problems:
 │                   stream-parser.sh                           │
 │                      │        │                              │
 │     ┌────────────────┴────────┴────────────────┐            │
-│     │                                           │            │
 │     ▼                                           ▼            │
 │  .ralph/                                    Signals          │
 │  ├── activity.log  (tool calls)            ├── WARN at 70k  │
 │  ├── errors.log    (failures)              ├── ROTATE at 80k│
-│  ├── progress.md   (agent writes)          └── GUTTER       │
-│  └── guardrails.md (lessons learned)                        │
+│  ├── progress.md   (agent writes)          ├── COMPLETE     │
+│  └── guardrails.md (lessons learned)       └── GUTTER       │
 │                                                              │
-│  When ROTATE → cursor-agent --resume (fresh context)        │
+│  When ROTATE → fresh context, continue from git             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 **Key features:**
+- **Interactive setup** - Beautiful gum-based UI for model selection and options
 - **Accurate token tracking** - Parser counts actual bytes from every file read/write
 - **Gutter detection** - Detects when agent is stuck (same command failed 3x, file thrashing)
 - **Learning from failures** - Agent updates `.ralph/guardrails.md` with lessons
 - **State in git** - Commits frequently so next agent picks up from git history
+- **Branch/PR workflow** - Optionally work on a branch and open PR when complete
 
 ## Prerequisites
 
@@ -69,6 +78,7 @@ This creates two problems:
 |-------------|-------|---------------|
 | **Git repo** | `git status` works | `git init` |
 | **cursor-agent CLI** | `which cursor-agent` | `curl https://cursor.com/install -fsS \| bash` |
+| **gum** (optional) | `which gum` | `brew install gum` - for enhanced UI |
 
 ## Quick Start
 
@@ -83,9 +93,11 @@ This creates:
 ```
 your-project/
 ├── .cursor/ralph-scripts/      # Ralph scripts
-│   ├── ralph-loop.sh           # Main entry point
+│   ├── ralph-setup.sh          # Main entry point (interactive)
+│   ├── ralph-loop.sh           # CLI mode (for scripting)
+│   ├── ralph-once.sh           # Single iteration (testing)
 │   ├── stream-parser.sh        # Token tracking
-│   ├── ralph-common.sh         # Shared config
+│   ├── ralph-common.sh         # Shared functions
 │   └── init-ralph.sh           # Re-initialize if needed
 ├── .ralph/                     # State files (tracked in git)
 │   ├── progress.md             # Agent updates: what's done
@@ -95,7 +107,33 @@ your-project/
 └── RALPH_TASK.md               # Your task definition
 ```
 
-### 2. Define Your Task
+### 2. (Optional) Install gum for Enhanced UI
+
+```bash
+brew install gum
+```
+
+With gum, you get a beautiful interactive menu for selecting models and options:
+
+```
+? Select model:
+  ◉ opus-4.5-thinking
+  ◯ sonnet-4.5-thinking
+  ◯ gpt-5.2-high
+  ◯ composer-1
+  ◯ Custom...
+
+? Max iterations: 20
+
+? Options:
+  ◯ Run single iteration first
+  ◯ Work on new branch
+  ◯ Open PR when complete
+```
+
+Without gum, Ralph falls back to simple numbered prompts.
+
+### 3. Define Your Task
 
 Edit `RALPH_TASK.md`:
 
@@ -124,34 +162,66 @@ Build a REST API with user management.
 
 **Important:** Use `[ ]` checkboxes. Ralph tracks completion by counting unchecked boxes.
 
-### 3. Start the Loop
+### 4. Start the Loop
 
 ```bash
-./.cursor/ralph-scripts/ralph-loop.sh
+./.cursor/ralph-scripts/ralph-setup.sh
 ```
 
 Ralph will:
-1. Show task summary and ask for confirmation
+1. Show interactive UI for model and options (or simple prompts if gum not installed)
 2. Run `cursor-agent` with your task
 3. Parse output in real-time, tracking token usage
 4. At 70k tokens: warn agent to wrap up current work
 5. At 80k tokens: rotate to fresh context
-6. Repeat until all `[ ]` are `[x]` (or max 20 iterations)
+6. Repeat until all `[ ]` are `[x]` (or max iterations reached)
 
-### 4. Monitor Progress
+### 5. Monitor Progress
 
 ```bash
 # Watch activity in real-time
 tail -f .ralph/activity.log
 
 # Example output:
-# [12:34:56] 🟢 READ src/index.ts (245 lines, ~19.6KB)
+# [12:34:56] 🟢 READ src/index.ts (245 lines, ~24.5KB)
 # [12:34:58] 🟢 WRITE src/routes/users.ts (50 lines, 2.1KB)
 # [12:35:01] 🟢 SHELL npm test → exit 0
-# [12:35:10] 🟢 TOKENS: 45,230 / 80,000 (56%)
+# [12:35:10] 🟢 TOKENS: 45,230 / 80,000 (56%) [read:30KB write:5KB assist:10KB shell:0KB]
 
 # Check for failures
 cat .ralph/errors.log
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `ralph-setup.sh` | **Primary** - Interactive setup + run loop |
+| `ralph-once.sh` | Test single iteration before going AFK |
+| `ralph-loop.sh` | CLI mode for scripting (see flags below) |
+| `init-ralph.sh` | Re-initialize Ralph state |
+
+### ralph-loop.sh Flags (for scripting/CI)
+
+```bash
+./ralph-loop.sh [options] [workspace]
+
+Options:
+  -n, --iterations N     Max iterations (default: 20)
+  -m, --model MODEL      Model to use (default: opus-4.5-thinking)
+  --branch NAME          Create and work on a new branch
+  --pr                   Open PR when complete (requires --branch)
+  -y, --yes              Skip confirmation prompt
+```
+
+**Examples:**
+
+```bash
+# Scripted PR workflow
+./ralph-loop.sh --branch feature/api --pr -y
+
+# Use a different model with more iterations
+./ralph-loop.sh -n 50 -m gpt-5.2-high
 ```
 
 ## How It Works
@@ -228,8 +298,8 @@ The activity log shows context health with emoji:
 
 Example:
 ```
-[12:34:56] 🟢 READ src/index.ts (245 lines, ~19.6KB)
-[12:40:22] 🟡 TOKENS: 58,000 / 80,000 (72%) - approaching limit
+[12:34:56] 🟢 READ src/index.ts (245 lines, ~24.5KB)
+[12:40:22] 🟡 TOKENS: 58,000 / 80,000 (72%) - approaching limit [read:40KB write:8KB assist:10KB shell:0KB]
 [12:45:33] 🔴 TOKENS: 72,500 / 80,000 (90%) - rotation imminent
 ```
 
@@ -241,11 +311,21 @@ The parser detects when the agent is stuck:
 |---------|---------|--------------|
 | Repeated failure | Same command failed 3x | GUTTER signal |
 | File thrashing | Same file written 5x in 10 min | GUTTER signal |
+| Agent signals | Agent outputs `<ralph>GUTTER</ralph>` | GUTTER signal |
 
 When gutter is detected:
 1. Check `.ralph/errors.log` for the pattern
 2. Fix the issue manually or add a guardrail
 3. Re-run the loop
+
+## Completion Detection
+
+Ralph detects completion in two ways:
+
+1. **Checkbox check**: All `[ ]` in RALPH_TASK.md changed to `[x]`
+2. **Agent sigil**: Agent outputs `<ralph>COMPLETE</ralph>`
+
+Both are verified before declaring success.
 
 ## File Reference
 
@@ -260,22 +340,23 @@ When gutter is detected:
 
 ## Configuration
 
-Edit thresholds in `.cursor/ralph-scripts/ralph-loop.sh`:
+Configuration is set via command-line flags or environment variables:
+
+```bash
+# Via flags (recommended)
+./ralph-loop.sh -n 50 -m gpt-5.2-high
+
+# Via environment
+RALPH_MODEL=gpt-5.2-high MAX_ITERATIONS=50 ./ralph-loop.sh
+```
+
+Default thresholds in `ralph-common.sh`:
 
 ```bash
 MAX_ITERATIONS=20       # Max rotations before giving up
 WARN_THRESHOLD=70000    # Tokens: send wrapup warning
 ROTATE_THRESHOLD=80000  # Tokens: force rotation
 ```
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `./.cursor/ralph-scripts/ralph-loop.sh` | Start autonomous loop |
-| `./.cursor/ralph-scripts/ralph-loop.sh /path/to/project` | Start loop in specific project |
-| `./.cursor/ralph-scripts/init-ralph.sh` | Re-initialize Ralph state |
-| `tail -f .ralph/activity.log` | Monitor progress in real-time |
 
 ## Troubleshooting
 
@@ -304,11 +385,34 @@ Check if criteria are too vague. Each criterion should be:
 - Achievable in a single iteration
 - Not dependent on manual steps
 
+## Workflows
+
+### Basic (default)
+
+```bash
+./ralph-setup.sh  # Interactive setup → runs loop → done
+```
+
+### Human-in-the-loop (recommended for new tasks)
+
+```bash
+./ralph-once.sh   # Run ONE iteration
+# Review changes...
+./ralph-setup.sh  # Continue with full loop
+```
+
+### Scripted/CI
+
+```bash
+./ralph-loop.sh --branch feature/foo --pr -y
+```
+
 ## Learn More
 
 - [Original Ralph technique](https://ghuntley.com/ralph/) - Geoffrey Huntley
 - [Context as memory](https://ghuntley.com/allocations/) - The malloc/free metaphor
 - [Cursor CLI docs](https://cursor.com/docs/cli/headless)
+- [gum - A tool for glamorous shell scripts](https://github.com/charmbracelet/gum)
 
 ## Credits
 

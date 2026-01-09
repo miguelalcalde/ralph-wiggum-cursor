@@ -1,5 +1,6 @@
 ---
 task: Build a REST API for task management
+test_command: "npm test"
 completion_criteria:
   - All CRUD endpoints working and tested
   - Input validation implemented
@@ -64,13 +65,15 @@ Build a simple but production-ready REST API for managing tasks (todo items). Th
 
 The task is complete when ALL of the following are true:
 
-1. [ ] All 6 endpoints implemented and returning correct responses
-2. [ ] Input validation rejects invalid data with 400 status
-3. [ ] 404 returned for non-existent resources
-4. [ ] Test coverage > 80% (run `npm test -- --coverage`)
-5. [ ] README.md documents all endpoints with examples
-6. [ ] `npm start` runs the server without errors
-7. [ ] `npm test` passes all tests
+1. [ ] `npm start` runs the server without errors
+2. [ ] POST /tasks implemented (validation + tests)
+3. [ ] GET /tasks implemented (pagination/filtering + tests)
+4. [ ] GET /tasks/:id implemented (404 + tests)
+5. [ ] PUT /tasks/:id implemented (validation + 404 + tests)
+6. [ ] PATCH /tasks/:id/complete implemented (tests)
+7. [ ] DELETE /tasks/:id implemented (404 + tests)
+8. [ ] Test coverage > 80% (run `npm test -- --coverage`)
+9. [ ] README.md documents all endpoints with examples
 
 ## Technical Notes
 
@@ -128,5 +131,5 @@ When working on this task:
 4. Update `.ralph/progress.md` with your progress
 5. Commit your changes with descriptive messages
 6. Run tests frequently to verify progress
-7. When ALL criteria are met, say: `RALPH_COMPLETE: All criteria satisfied`
-8. If stuck on the same issue 3+ times, say: `RALPH_GUTTER: Need fresh context`
+7. When ALL criteria are met (all `[ ]` → `[x]`), output: `<ralph>COMPLETE</ralph>`
+8. If stuck on the same issue 3+ times, output: `<ralph>GUTTER</ralph>`

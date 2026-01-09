@@ -45,7 +45,9 @@ echo "📥 Downloading Ralph scripts..."
 
 SCRIPTS=(
   "ralph-common.sh"
+  "ralph-setup.sh"
   "ralph-loop.sh"
+  "ralph-once.sh"
   "stream-parser.sh"
   "init-ralph.sh"
 )
@@ -188,8 +190,8 @@ $ npx ts-node todo.ts done 1
 2. Check off completed criteria (change [ ] to [x])
 3. Run tests after changes
 4. Commit your changes frequently
-5. When ALL criteria are [x], say: `RALPH_COMPLETE`
-6. If stuck on the same issue 3+ times, say: `RALPH_GUTTER`
+5. When ALL criteria are [x], output: `<ralph>COMPLETE</ralph>`
+6. If stuck on the same issue 3+ times, output: `<ralph>GUTTER</ralph>`
 TASKEOF
   echo "✓ Created RALPH_TASK.md with example task"
 else
@@ -218,6 +220,14 @@ echo "✓ Updated .gitignore"
 # SUMMARY
 # =============================================================================
 
+# Check for gum
+HAS_GUM=""
+if command -v gum &> /dev/null; then
+  HAS_GUM="✓"
+else
+  HAS_GUM="✗"
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════════════════════"
 echo "✅ Ralph installed!"
@@ -225,7 +235,11 @@ echo "════════════════════════�
 echo ""
 echo "Files created:"
 echo ""
-echo "  📁 .cursor/ralph-scripts/      - Ralph scripts"
+echo "  📁 .cursor/ralph-scripts/"
+echo "     ├── ralph-setup.sh          - Main entry (interactive)"
+echo "     ├── ralph-loop.sh           - CLI mode (for scripting)"
+echo "     ├── ralph-once.sh           - Single iteration (testing)"
+echo "     └── ...                     - Other utilities"
 echo ""
 echo "  📁 .ralph/                     - State files (tracked in git)"
 echo "     ├── guardrails.md           - Lessons learned"
@@ -235,9 +249,16 @@ echo "     └── errors.log              - Failure log"
 echo ""
 echo "  📄 RALPH_TASK.md               - Your task definition (edit this!)"
 echo ""
+echo "Optional dependency:"
+echo "  [$HAS_GUM] gum - Beautiful CLI menus (brew install gum)"
+echo ""
 echo "Next steps:"
 echo "  1. Edit RALPH_TASK.md to define your actual task"
-echo "  2. Run: ./.cursor/ralph-scripts/ralph-loop.sh"
+echo "  2. Run: ./.cursor/ralph-scripts/ralph-setup.sh"
+echo ""
+echo "Alternative commands:"
+echo "  • ralph-once.sh    - Test with single iteration first"
+echo "  • ralph-loop.sh    - CLI mode with flags (for scripting)"
 echo ""
 echo "Monitor progress:"
 echo "  tail -f .ralph/activity.log"

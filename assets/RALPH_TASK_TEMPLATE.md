@@ -54,5 +54,5 @@ When working on this task:
 3. Work on the next incomplete criterion
 4. Update `.ralph/progress.md` with your progress
 5. Commit your changes with descriptive messages
-6. When ALL criteria are met, say: `RALPH_COMPLETE: All criteria satisfied`
-7. If stuck on the same issue 3+ times, say: `RALPH_GUTTER: Need fresh context`
+6. When ALL criteria are met (all `[ ]` → `[x]`), output: `<ralph>COMPLETE</ralph>`
+7. If stuck on the same issue 3+ times, output: `<ralph>GUTTER</ralph>`

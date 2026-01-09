@@ -249,5 +249,5 @@ ts-narrow/
 4. A criterion is only complete when relevant tests pass
 5. Commit after completing each criterion
 6. **Criterion 17 is CRITICAL** - the final type must reflect narrowing scope
-7. When ALL criteria are [x] AND `npm test` passes: `RALPH_COMPLETE`
-8. If stuck on same issue 3+ times: `RALPH_GUTTER`
+7. When ALL criteria are [x] AND `npm test` passes: `<ralph>COMPLETE</ralph>`
+8. If stuck on same issue 3+ times: `<ralph>GUTTER</ralph>`

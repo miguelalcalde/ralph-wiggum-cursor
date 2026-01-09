@@ -32,7 +32,7 @@ The process is a loop of local work, automated handoff, cloud-based work, and ma
 -   The Cloud Agent operates entirely on its dedicated iteration branch.
 -   It reads the task definition (`RALPH_TASK.md`) and progress files (`.ralph/progress.md`) to understand the state of the project.
 -   It continues the task, committing its changes to the `ralph-iteration-N` branch.
--   The agent works until it either completes the task, gets stuck (a `RALPH_GUTTER` state), or hits its own context limits.
+-   The agent works until it either completes the task, gets stuck (outputs `<ralph>GUTTER</ralph>`), or hits its own context limits.
 
 ### 4. Merging Back to `main` (Manual)
 
