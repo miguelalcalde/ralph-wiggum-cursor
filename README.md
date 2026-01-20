@@ -377,6 +377,7 @@ RALPH_MODEL=gpt-5.2-high MAX_ITERATIONS=50 TASK_FILE=tasks/my-task.md ./ralph-lo
 Default thresholds in `ralph-common.sh`:
 
 ```bash
+MAX_ITERATIONS=20       # Max rotations before giving up
 WARN_THRESHOLD=70000    # Tokens: send wrapup warning
 ROTATE_THRESHOLD=80000  # Tokens: force rotation
 ```
